@@ -7,8 +7,7 @@ Este proyecto está orientado al análisis, visualización y desarrollo de una a
 
 packing_cerezas/
 
-├── R/                                  # Scripts con funciones personalizadas en R
-
+├── R/                                  # Scripts con funciones personalizadas en R  
 │   └── plot_temps.R
 
 │
