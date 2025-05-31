@@ -1,0 +1,212 @@
+---
+title: "analisis_packing_cerezas"
+author: "Adán Marchena"
+format: pdf
+editor: visual
+---
+
+## Análisis exploratorio de datos
+
+Carga de librerías
+
+```{r}
+#Librerias
+library(tidyverse)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(skimr)
+library(psych)
+library(nnet)
+library(plotly)
+```
+
+Procesos
+
+```{r}
+#Cargar datos
+data <- read.csv('data/packing_cerezas.csv')
+```
+
+```{r}
+#Número de filas y columnas
+dim(data)
+```
+
+```{r}
+#Nombres de columnas
+colnames(data)
+```
+
+```{r}
+#Tipos de datos
+str(data)
+```
+
+```{r}
+# Convertir los tipos de datos
+data <- data %>%
+  mutate(
+    fecha = as.Date(fecha, format = "%Y-%m-%d"),  # Ajusta el formato si es distinto
+    n_cajas = as.numeric(n_cajas),
+    tiempo_min = as.numeric(tiempo_min),
+    calidad = recode(calidad, "baja" = 1, "estandar" = 2, "premium" = 3),
+    operario_id = as.character(operario_id)
+  )
+```
+
+```{r}
+head(data)
+```
+
+```{r}
+describe(data)
+```
+
+```{r}
+summary(data)
+```
+
+```{r}
+# Boxplot de peso_total_kg
+ggplot(data, aes(y = peso_total_kg)) +
+  geom_boxplot(fill = "skyblue", color = "darkblue") +
+  labs(title = "Boxplot de peso_total_kg",
+       y = "Peso total (kg)",
+       x = "") +
+  theme_minimal()
+
+#Boxplot de tiempo_min
+ggplot(data, aes(y = tiempo_min)) +
+  geom_boxplot(fill = "salmon", color = "darkred") +
+  labs(title = "Boxplot de tiempo_min",
+       y = "Tiempo (min)",
+       x = "") +
+  theme_minimal()
+```
+
+## Preprocesamiento de datos
+
+Corregir NA's
+
+```{r}
+# Verificar si hay algún NA en todo el dataset
+if (any(is.na(data))) {
+  
+  # Imputar solo si hay NA
+  for (col in names(data)) {
+    if (is.numeric(data[[col]])) {
+      media <- mean(data[[col]], na.rm = TRUE)
+      data[[col]][is.na(data[[col]])] <- media
+    }
+  }
+  cat("Se imputaron los valores NA con la media.\n")
+} else {
+  cat("No hay valores NA en el dataset. No se hizo imputación.\n")
+}
+```
+
+## Regresión multinomial
+
+```{r}
+multinomial_completo <- function(data, variable_dependiente) {
+
+  # 1. Ajustar el modelo (suprimiendo output iterativo)
+  data[[variable_dependiente]] <- as.factor(data[[variable_dependiente]])
+  variables_covariables <- c("turno", "calibre", "tiempo_min") 
+formula <- as.formula(paste(variable_dependiente, "~", paste(variables_covariables, collapse = " + ")))
+  
+  sink(tempfile()) # Suprimir salida iterativa
+  modelo <- multinom(formula, data = data)
+  sink() # Restaurar salida
+  
+  # 2. Procesar resultados
+  resumen <- summary(modelo)
+  coefs <- resumen$coefficients
+  ses <- resumen$standard.errors
+  
+  # Calcular estadísticos
+  z <- coefs / ses
+  p <- 2 * (1 - pnorm(abs(z)))
+  ci_lower <- coefs - 1.96 * ses
+  ci_upper <- coefs + 1.96 * ses
+  
+  # Preparar datos para gráficos
+  final_df <- as.data.frame(coefs) %>%
+    rownames_to_column("Clase") %>%
+    pivot_longer(-Clase, names_to = "Variable", values_to = "Coeficiente") %>%
+    left_join(
+      as.data.frame(p) %>%
+        rownames_to_column("Clase") %>%
+        pivot_longer(-Clase, names_to = "Variable", values_to = "p_valor"),
+      by = c("Clase", "Variable")
+    ) %>%
+    left_join(
+      as.data.frame(ci_lower) %>%
+        rownames_to_column("Clase") %>%
+        pivot_longer(-Clase, names_to = "Variable", values_to = "CI_lower"),
+      by = c("Clase", "Variable")
+    ) %>%
+    left_join(
+      as.data.frame(ci_upper) %>%
+        rownames_to_column("Clase") %>%
+        pivot_longer(-Clase, names_to = "Variable", values_to = "CI_upper"),
+      by = c("Clase", "Variable")
+    ) %>%
+    mutate(Significativo = ifelse(p_valor < 0.05, "Sí", "No"))
+  
+  # 3. Crear gráficos
+  plot_list <- list()
+  clases <- unique(final_df$Clase)
+  
+  for(cl in clases) {
+    df_clase <- final_df %>% filter(Clase == cl)
+    
+    p <- ggplot(df_clase, aes(x = Variable, y = Coeficiente, color = Significativo)) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+      geom_point(size = 3) +
+      geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.2) +
+      labs(title = paste("Coeficientes para:", cl),
+           y = "Coeficiente estimado",
+           x = "Covariable",
+           color = "Significativo (p < 0.05)") +
+      scale_color_manual(values = c("Sí" = "red", "No" = "gray")) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            plot.title = element_text(hjust = 0.5))
+    
+    plot_list[[cl]] <- p
+  }
+  
+  # 4. Visualizar gráficos automáticamente
+  if(length(plot_list) > 0) {
+    # Crear una nueva ventana gráfica
+    dev.new()
+    
+    # Mostrar cada gráfico
+    for(i in seq_along(plot_list)) {
+      print(plot_list[[i]])
+      if(i < length(plot_list)) {
+        readline(prompt = "Presiona [Enter] para ver el siguiente gráfico...")
+      }
+    }
+  }
+  
+  # 5. Devolver resultados
+  return(list(modelo = modelo, graficos = plot_list, datos = final_df))
+}
+```
+
+```{r}
+# Ejecutar función
+resultados <- multinomial_completo(data, "calidad")
+
+# Para acceder a los componentes:
+modelo <- resultados$modelo
+graficos <- resultados$graficos
+datos <- resultados$datos
+
+# IMprimir gráfico
+print(graficos[[1]])
+```
